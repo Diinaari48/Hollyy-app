@@ -16,9 +16,7 @@ data class Item(
     val name: String,
     val systemName: String? = null,
     val cost: Double = 0.0,
-    val wholesalePrice: Double = 0.0, // "macamil"
     val price: Double, // "qiimaha" = official selling price
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
-

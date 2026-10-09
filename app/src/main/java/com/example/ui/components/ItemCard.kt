@@ -141,26 +141,6 @@ fun ItemCard(
                     }
                 }
 
-                // Wholesale Price ("Macamil")
-                if (item.wholesalePrice > 0.0) {
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = WholesalePurple.copy(alpha = 0.14f),
-                        contentColor = WholesalePurple
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Macamil: $${DistractorGenerator.formatPrice(item.wholesalePrice)}",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-                }
-
                 // Cost ("Kharashka")
                 if (item.cost > 0.0) {
                     Surface(

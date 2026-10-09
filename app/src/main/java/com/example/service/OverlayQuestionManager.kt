@@ -158,7 +158,7 @@ class OverlayQuestionManager(
 
         // Question Title
         val questionText = TextView(context).apply {
-            text = "Qiimaha ${question.item.name} waa immisa marka macaamiil laga iibinayo?"
+            text = question.questionText
             setTextColor(Color.parseColor("#1C1B1F"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
             typeface = Typeface.DEFAULT_BOLD
@@ -192,8 +192,10 @@ class OverlayQuestionManager(
         }
 
         val options = question.options.ifEmpty {
-            DistractorGenerator.generateOptions(question.item.price)
+            DistractorGenerator.buildOptions(question.targetPrice)
         }
+
+        val allOptionButtons = mutableListOf<Pair<Button, Double>>()
 
         // 2 rows of 2 options
         val optionRows = options.chunked(2)
@@ -224,7 +226,7 @@ class OverlayQuestionManager(
                         isAnswered = true
                         cancelTimeout()
 
-                        val isCorrect = abs(option - question.item.price) < 0.009
+                        val isCorrect = abs(option - question.targetPrice) < 0.009
                         val responseTime = System.currentTimeMillis() - overlayStartTime
                         val responseSec = (responseTime / 100) / 10.0
 
@@ -234,19 +236,15 @@ class OverlayQuestionManager(
                                 cornerRadius = dp(14).toFloat()
                             }
                             setTextColor(Color.WHITE)
+                            text = "✓ $${DistractorGenerator.formatPrice(option)}"
                             feedbackText.visibility = View.VISIBLE
-
-                            val speedMsg = when {
-                                responseTime < 4000L -> "Fiican ✅ Si fiican u yaqaanaa ⚡ (${responseSec}s)"
-                                responseTime > 8000L -> "Sax gaabis ah ⚠️ (${responseSec}s) — Dhakhso baa dib loogu soo celinayaa"
-                                else -> "Fiican ✅ (${responseSec}s)"
-                            }
-                            feedbackText.text = speedMsg
+                            feedbackText.text = "Sax! Waad heshay 🎉 (${responseSec}s)"
                             feedbackText.setTextColor(Color.parseColor("#2E7D32"))
 
                             serviceScope.launch {
                                 repository.recordAttempt(
                                     itemId = question.item.id,
+                                    questionType = question.questionType,
                                     type = "WORK_SESSION",
                                     result = "CORRECT",
                                     answerGiven = option,
@@ -259,13 +257,28 @@ class OverlayQuestionManager(
                                 cornerRadius = dp(14).toFloat()
                             }
                             setTextColor(Color.WHITE)
+                            text = "✗ $${DistractorGenerator.formatPrice(option)}"
+
+                            // Highlight correct tile green
+                            for (pair in allOptionButtons) {
+                                if (abs(pair.second - question.targetPrice) < 0.009) {
+                                    pair.first.background = GradientDrawable().apply {
+                                        setColor(Color.parseColor("#2E7D32"))
+                                        cornerRadius = dp(14).toFloat()
+                                    }
+                                    pair.first.setTextColor(Color.WHITE)
+                                    pair.first.text = "✓ $${DistractorGenerator.formatPrice(pair.second)}"
+                                }
+                            }
+
                             feedbackText.visibility = View.VISIBLE
-                            feedbackText.text = "Khalad ❌ Qiimaha rasmiga ah waa $${DistractorGenerator.formatPrice(question.item.price)}"
+                            feedbackText.text = "Khalad ❌ Qiimaha rasmiga ah waa $${DistractorGenerator.formatPrice(question.targetPrice)}"
                             feedbackText.setTextColor(Color.parseColor("#C62828"))
 
                             serviceScope.launch {
                                 repository.recordAttempt(
                                     itemId = question.item.id,
+                                    questionType = question.questionType,
                                     type = "WORK_SESSION",
                                     result = "WRONG",
                                     answerGiven = option,
@@ -281,6 +294,7 @@ class OverlayQuestionManager(
                         }, 1400)
                     }
                 }
+                allOptionButtons.add(Pair(btn, option))
                 row.addView(btn)
             }
             optionsContainer.addView(row)

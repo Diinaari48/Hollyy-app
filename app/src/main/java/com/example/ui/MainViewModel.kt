@@ -33,6 +33,7 @@ import com.example.util.DistractorGenerator
 import com.example.util.NotificationHelper
 import com.example.util.ReportAnalyzer
 import com.example.util.SampleData
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -46,6 +47,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
 enum class FeedbackType {
@@ -111,6 +113,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val currentUser: StateFlow<SupabaseUser?> = supabaseClient.currentUser
 
+    private val _isItemsLoading = MutableStateFlow(false)
+    val isItemsLoading: StateFlow<Boolean> = _isItemsLoading.asStateFlow()
+
     init {
         // Initial auth check
         val initialUser = supabaseClient.currentUser.value
@@ -118,7 +123,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _authState.value = AuthState.Authenticated(initialUser)
             // Schedule reminder for active user
             DailyReminderManager.scheduleDailyReminder(application, com.example.service.WorkSessionManager.sessionConfig.value)
+            loadItems()
             triggerSilentSync()
+        }
+        registerNetworkCallback()
+    }
+
+    private fun registerNetworkCallback() {
+        val cm = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return
+        val request = android.net.NetworkRequest.Builder()
+            .addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        try {
+            cm.registerNetworkCallback(request, object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) {
+                    viewModelScope.launch {
+                        if (currentUser.value != null) {
+                            loadItems()
+                        }
+                    }
+                }
+            })
+        } catch (e: Exception) {
+            android.util.Log.e("MainViewModel", "Failed registering network callback", e)
+        }
+    }
+
+    fun loadItems() {
+        viewModelScope.launch {
+            if (_isItemsLoading.value) return@launch
+            _isItemsLoading.value = true
+            try {
+                supabaseSyncManager.loadItems(showToastOnError = true)
+            } finally {
+                _isItemsLoading.value = false
+            }
         }
     }
 
@@ -141,10 +180,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun signUp(normalizedPhone: String, password: String, fullName: String?) {
         viewModelScope.launch {
             _authState.value = AuthState.Loading
+            val prevUid = supabaseClient.currentUser.value?.id
             val result = supabaseClient.signUpWithPhone(normalizedPhone, password, fullName)
             result.onSuccess { user ->
+                if (!prevUid.isNullOrEmpty() && prevUid != user.id) {
+                    repository.clearCurrentUserData(prevUid)
+                }
                 _authState.value = AuthState.Authenticated(user)
                 DailyReminderManager.scheduleDailyReminder(getApplication(), sessionConfig.value)
+                loadItems()
             }.onFailure { err ->
                 _authState.value = AuthState.Error(err.message ?: "Diiwaangelintu waa fashilantay")
             }
@@ -154,10 +198,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun signIn(normalizedPhone: String, password: String) {
         viewModelScope.launch {
             _authState.value = AuthState.Loading
+            val prevUid = supabaseClient.currentUser.value?.id
             val result = supabaseClient.signInWithPhone(normalizedPhone, password)
             result.onSuccess { user ->
+                if (!prevUid.isNullOrEmpty() && prevUid != user.id) {
+                    repository.clearCurrentUserData(prevUid)
+                }
                 _authState.value = AuthState.Authenticated(user)
                 DailyReminderManager.scheduleDailyReminder(getApplication(), sessionConfig.value)
+                loadItems()
                 // Optional auto-sync on login
                 if (supabaseSyncManager.isOnline()) {
                     supabaseSyncManager.performSync()
@@ -192,6 +241,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Pop any sub-screens back to Main
         if (_screenStack.value.size > 1) {
             _screenStack.value = listOf(Screen.Main)
+        }
+        if (tab == NavTab.ITEMS) {
+            loadItems()
         }
     }
 
@@ -357,13 +409,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // CRUD Item operations
-    fun addItem(name: String, systemName: String?, cost: Double, wholesalePrice: Double, price: Double) {
+    fun addItem(name: String, systemName: String?, cost: Double, price: Double) {
+        val uid = supabaseClient.currentUser.value?.id ?: return
         viewModelScope.launch {
             val item = Item(
+                userId = uid,
                 name = name,
                 systemName = systemName?.ifBlank { null },
                 cost = cost,
-                wholesalePrice = wholesalePrice,
                 price = price
             )
             repository.insertItem(item)
@@ -843,8 +896,74 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun performCloudSync() {
         viewModelScope.launch {
+            loadItems()
             supabaseSyncManager.performSync()
         }
+    }
+
+    suspend fun getDebugInfo(): String = withContext(Dispatchers.IO) {
+        val sb = StringBuilder()
+
+        // a) backend URL host only (never keys) and whether URL and anon key are non-empty
+        val url = supabaseClient.getBaseUrl()
+        val anonKey = supabaseClient.getAnonKey()
+        val host = try { java.net.URI(url).host ?: "unknown" } catch (_: Exception) { "invalid_url" }
+        sb.append("=== A) BACKEND CONFIG ===\n")
+        sb.append("Host: $host\n")
+        sb.append("URL Non-Empty: ${url.isNotBlank()}\n")
+        sb.append("Anon Key Non-Empty: ${anonKey.isNotBlank()}\n\n")
+
+        // b) session: user id, phone, whether an access token exists, token expiry
+        val user = supabaseClient.currentUser.value
+        sb.append("=== B) SESSION ===\n")
+        sb.append("User ID: ${user?.id ?: "(none)"}\n")
+        sb.append("Phone: ${user?.phone ?: "(none)"}\n")
+        val hasToken = !user?.accessToken.isNullOrBlank()
+        sb.append("Access Token Exists: $hasToken\n")
+        val exp = if (user != null) {
+            if (user.expiresAt > 0L) user.expiresAt else supabaseClient.getJwtExpiry(user.accessToken)
+        } else 0L
+        val isExp = supabaseClient.isTokenExpired()
+        val expDateStr = if (exp > 0L) {
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+            sdf.format(java.util.Date(exp * 1000))
+        } else "unknown"
+        sb.append("Token Expiry: $expDateStr (Expired: $isExp)\n\n")
+
+        // c) a RAW request made right now
+        sb.append("=== C) RAW REQUEST (LIVE) ===\n")
+        val rawResult = supabaseClient.fetchItemsRaw(retryOnAuthError = false)
+        sb.append("HTTP Status: ${rawResult.httpStatus}\n")
+        sb.append("Row Count: ${rawResult.rowCount}\n")
+        sb.append("Body Snippet (first 300 chars):\n")
+        sb.append(rawResult.bodySnippet)
+        sb.append("\n\n")
+
+        // d) number of items in the local database for the current user id
+        val localCount = if (user != null) {
+            db.itemDao().getItemsCountForUser(user.id)
+        } else 0
+        sb.append("=== D) LOCAL DATABASE ===\n")
+        sb.append("Items in Local DB: $localCount\n\n")
+
+        // e) the last load result: parsed N, saved N, skipped K, and every exception
+        val lastLoad = supabaseSyncManager.lastLoadResult.value
+        sb.append("=== E) LAST LOAD RESULT ===\n")
+        if (lastLoad != null) {
+            sb.append("Parsed: ${lastLoad.parsedCount}\n")
+            sb.append("Saved: ${lastLoad.savedCount}\n")
+            sb.append("Skipped: ${lastLoad.skippedCount}\n")
+            if (lastLoad.error != null || lastLoad.exceptionDetails != null) {
+                sb.append("Error: ${lastLoad.error}\n")
+                sb.append("Exception: ${lastLoad.exceptionDetails}\n")
+            } else {
+                sb.append("Exceptions: None\n")
+            }
+        } else {
+            sb.append("No loadItems() executed yet.\n")
+        }
+
+        sb.toString()
     }
 
     fun seedSampleMedicines() {

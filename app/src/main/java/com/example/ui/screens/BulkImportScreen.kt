@@ -124,7 +124,7 @@ fun BulkImportScreen(
                     }
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Item, cost, Magaca systemka, macamil, qiimaha",
+                        text = "Item, cost, Magaca systemka, qiimaha",
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.primary
@@ -173,7 +173,7 @@ fun BulkImportScreen(
                     rawText = it
                 },
                 label = { Text("Dheji qoraalka ama CSV halkan") },
-                placeholder = { Text("Item,cost,Magaca systemka,macamil,qiimaha\nParacetamol 500mg,0.50,PARA-500,0.80,1.00") },
+                placeholder = { Text("Item,cost,Magaca systemka,qiimaha\nParacetamol 500mg,0.50,PARA-500,1.00") },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(200.dp)

@@ -2,6 +2,8 @@ package com.example.data.sync
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Base64
+import android.util.Log
 import com.example.util.SomaliPhoneAuthValidator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,7 +24,17 @@ data class SupabaseUser(
     val phone: String,
     val email: String,
     val fullName: String?,
-    val accessToken: String
+    val accessToken: String,
+    val refreshToken: String? = null,
+    val expiresAt: Long = 0L
+)
+
+data class RawRequestResult(
+    val httpStatus: Int,
+    val rowCount: Int,
+    val bodySnippet: String,
+    val isSuccess: Boolean,
+    val rawBody: String
 )
 
 class SupabaseClient(private val context: Context) {
@@ -49,20 +61,27 @@ class SupabaseClient(private val context: Context) {
         val email = prefs.getString("user_email", null)
         val fullName = prefs.getString("user_full_name", null)
         val token = prefs.getString("access_token", null)
+        val refreshToken = prefs.getString("refresh_token", null)
+        val expiresAt = prefs.getLong("expires_at", 0L)
+
         if (!id.isNullOrEmpty() && !token.isNullOrEmpty()) {
             val validEmail = email ?: if (!phone.isNullOrEmpty()) SomaliPhoneAuthValidator.phoneToEmail(phone) else ""
             val validPhone = phone ?: if (!email.isNullOrEmpty()) SomaliPhoneAuthValidator.extractPhoneFromEmail(email) else ""
+            val effExp = if (expiresAt > 0L) expiresAt else getJwtExpiry(token)
+
             _currentUser.value = SupabaseUser(
                 id = id,
                 phone = validPhone,
                 email = validEmail,
                 fullName = fullName,
-                accessToken = token
+                accessToken = token,
+                refreshToken = refreshToken,
+                expiresAt = effExp
             )
         }
     }
 
-    private fun saveSession(user: SupabaseUser?) {
+    fun saveSession(user: SupabaseUser?) {
         _currentUser.value = user
         prefs.edit().apply {
             if (user != null) {
@@ -71,6 +90,10 @@ class SupabaseClient(private val context: Context) {
                 putString("user_email", user.email)
                 putString("user_full_name", user.fullName)
                 putString("access_token", user.accessToken)
+                if (user.refreshToken != null) {
+                    putString("refresh_token", user.refreshToken)
+                }
+                putLong("expires_at", user.expiresAt)
                 putBoolean("has_signed_up_once", true)
             } else {
                 remove("user_id")
@@ -78,6 +101,8 @@ class SupabaseClient(private val context: Context) {
                 remove("user_email")
                 remove("user_full_name")
                 remove("access_token")
+                remove("refresh_token")
+                remove("expires_at")
             }
             apply()
         }
@@ -98,11 +123,84 @@ class SupabaseClient(private val context: Context) {
 
     fun getAnonKey(): String = SupabaseConfig.getSupabaseAnonKey(context)
 
-    /**
-     * Signs up a new user using the standard Supabase Auth client method (POST /auth/v1/signup).
-     * Uses synthetic email "{phone}@holly.com" behind the scenes.
-     * If session is null/empty, immediately calls signInWithPhone with the same credentials.
-     */
+    fun getJwtExpiry(token: String): Long {
+        return try {
+            val parts = token.split(".")
+            if (parts.size >= 2) {
+                val payloadBytes = Base64.decode(parts[1], Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+                val json = JSONObject(String(payloadBytes, Charsets.UTF_8))
+                json.optLong("exp", 0L)
+            } else {
+                0L
+            }
+        } catch (_: Exception) {
+            0L
+        }
+    }
+
+    fun isTokenExpired(): Boolean {
+        val user = _currentUser.value ?: return true
+        if (user.accessToken.isBlank()) return true
+        val exp = if (user.expiresAt > 0L) user.expiresAt else getJwtExpiry(user.accessToken)
+        if (exp <= 0L) return false
+        val currentSec = System.currentTimeMillis() / 1000
+        return currentSec >= (exp - 30) // 30-second buffer
+    }
+
+    suspend fun refreshSession(): Result<SupabaseUser> = withContext(Dispatchers.IO) {
+        try {
+            val baseUrl = getBaseUrl()
+            val anonKey = getAnonKey()
+            val user = _currentUser.value ?: return@withContext Result.failure(Exception("No user logged in"))
+            val refreshToken = user.refreshToken ?: prefs.getString("refresh_token", null)
+
+            if (refreshToken.isNullOrEmpty()) {
+                return@withContext Result.failure(Exception("No refresh token available"))
+            }
+
+            val bodyJson = JSONObject().apply {
+                put("refresh_token", refreshToken)
+            }
+
+            val request = Request.Builder()
+                .url("$baseUrl/auth/v1/token?grant_type=refresh_token")
+                .addHeader("apikey", anonKey)
+                .addHeader("Authorization", "Bearer $anonKey")
+                .addHeader("Content-Type", "application/json")
+                .post(bodyJson.toString().toRequestBody(jsonMediaType))
+                .build()
+
+            val response = httpClient.newCall(request).execute()
+            val respBody = response.body?.string().orEmpty()
+
+            if (!response.isSuccessful) {
+                Log.e("SupabaseAuth", "Refresh token failed: ${response.code} $respBody")
+                return@withContext Result.failure(Exception("Refresh session failed: ${response.code} $respBody"))
+            }
+
+            val json = JSONObject(respBody)
+            val newAccessToken = json.getString("access_token")
+            val newRefreshToken = json.optString("refresh_token", refreshToken)
+            val expiresAt = json.optLong("expires_at", 0L)
+            val effExp = if (expiresAt > 0L) expiresAt else getJwtExpiry(newAccessToken)
+            val userObj = json.optJSONObject("user")
+            val id = userObj?.optString("id", user.id) ?: user.id
+
+            val updatedUser = user.copy(
+                id = id,
+                accessToken = newAccessToken,
+                refreshToken = newRefreshToken,
+                expiresAt = effExp
+            )
+            saveSession(updatedUser)
+            Log.i("SupabaseAuth", "Session successfully refreshed for user: $id")
+            Result.success(updatedUser)
+        } catch (e: Exception) {
+            Log.e("SupabaseAuth", "Exception refreshing session: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
     suspend fun signUpWithPhone(
         normalizedPhone: String,
         password: String,
@@ -149,6 +247,8 @@ class SupabaseClient(private val context: Context) {
 
             val json = JSONObject(respBody)
             val accessToken = json.optString("access_token", "")
+            val refreshToken = json.optString("refresh_token", null)
+            val expiresAt = json.optLong("expires_at", 0L)
             val userObj = json.optJSONObject("user") ?: json
             val id = userObj.optString("id", "")
 
@@ -158,27 +258,25 @@ class SupabaseClient(private val context: Context) {
                     phone = normalizedPhone,
                     email = syntheticEmail,
                     fullName = fullName?.trim()?.ifBlank { null },
-                    accessToken = accessToken
+                    accessToken = accessToken,
+                    refreshToken = refreshToken,
+                    expiresAt = if (expiresAt > 0L) expiresAt else getJwtExpiry(accessToken)
                 )
                 saveSession(user)
                 fetchUserProfile()
                 Result.success(user)
             } else {
-                // If signUp returns no session (or email confirm was on), immediately call signInWithPhone with same credentials
                 signInWithPhone(normalizedPhone, password)
             }
         } catch (e: IOException) {
-            android.util.Log.e("SupabaseAuth", "Network error during signUp", e)
+            Log.e("SupabaseAuth", "Network error during signUp", e)
             Result.failure(Exception("Internet ma jiro"))
         } catch (e: Exception) {
-            android.util.Log.e("SupabaseAuth", "Exception during signUp: ${e.message}", e)
+            Log.e("SupabaseAuth", "Exception during signUp: ${e.message}", e)
             Result.failure(e)
         }
     }
 
-    /**
-     * Signs in an existing user using their normalized Somali phone number and password.
-     */
     suspend fun signInWithPhone(
         normalizedPhone: String,
         password: String
@@ -217,6 +315,8 @@ class SupabaseClient(private val context: Context) {
 
             val json = JSONObject(respBody)
             val accessToken = json.getString("access_token")
+            val refreshToken = json.optString("refresh_token", null)
+            val expiresAt = json.optLong("expires_at", 0L)
             val userObj = json.getJSONObject("user")
             val id = userObj.getString("id")
             val userMeta = userObj.optJSONObject("user_metadata")
@@ -227,24 +327,22 @@ class SupabaseClient(private val context: Context) {
                 phone = normalizedPhone,
                 email = syntheticEmail,
                 fullName = fullName,
-                accessToken = accessToken
+                accessToken = accessToken,
+                refreshToken = refreshToken,
+                expiresAt = if (expiresAt > 0L) expiresAt else getJwtExpiry(accessToken)
             )
             saveSession(user)
             fetchUserProfile()
             Result.success(user)
         } catch (e: IOException) {
-            android.util.Log.e("SupabaseAuth", "Network error during signIn", e)
+            Log.e("SupabaseAuth", "Network error during signIn", e)
             Result.failure(Exception("Internet ma jiro"))
         } catch (e: Exception) {
-            android.util.Log.e("SupabaseAuth", "Exception during signIn: ${e.message}", e)
+            Log.e("SupabaseAuth", "Exception during signIn: ${e.message}", e)
             Result.failure(e)
         }
     }
 
-    /**
-     * Reads the logged-in user's profile from the public.profiles table (populated by trigger).
-     * Does NOT insert into profiles from client.
-     */
     suspend fun fetchUserProfile(): Result<Pair<String, String?>> = withContext(Dispatchers.IO) {
         try {
             val user = _currentUser.value ?: return@withContext Result.failure(Exception("No user logged in"))
@@ -287,8 +385,7 @@ class SupabaseClient(private val context: Context) {
     }
 
     private fun mapAuthError(respBody: String, isSignUp: Boolean): String {
-        android.util.Log.e("SupabaseAuth", "Raw Supabase Auth Error: $respBody")
-        println("Raw Supabase Auth Error: $respBody")
+        Log.e("SupabaseAuth", "Raw Supabase Auth Error: $respBody")
         val lower = respBody.lowercase()
         return when {
             lower.contains("rate limit") || lower.contains("over_email_send_rate_limit") || lower.contains("email rate limit exceeded") -> {
@@ -321,6 +418,71 @@ class SupabaseClient(private val context: Context) {
         }
     }
 
+    /**
+     * Executes the exact items raw GET request with current user access token.
+     * Retries once on 401 or token expiration if retryOnAuthError is true.
+     */
+    suspend fun fetchItemsRaw(retryOnAuthError: Boolean = true): RawRequestResult = withContext(Dispatchers.IO) {
+        val baseUrl = getBaseUrl()
+        val anonKey = getAnonKey()
+        var user = currentUser.value
+        var token = user?.accessToken ?: ""
+
+        val urlStr = "$baseUrl/rest/v1/items?select=id,name,system_name,cost,price,created_at,updated_at&order=created_at.asc&limit=1000"
+
+        fun doCall(authToken: String): Pair<Int, String> {
+            val req = Request.Builder()
+                .url(urlStr)
+                .addHeader("apikey", anonKey)
+                .addHeader("Authorization", "Bearer $authToken")
+                .get()
+                .build()
+            val resp = httpClient.newCall(req).execute()
+            val code = resp.code
+            val body = resp.body?.string().orEmpty()
+            return Pair(code, body)
+        }
+
+        try {
+            var (code, body) = doCall(token)
+
+            if ((code == 401 || token.isBlank()) && retryOnAuthError) {
+                val refreshRes = refreshSession()
+                if (refreshRes.isSuccess) {
+                    val refreshedUser = refreshRes.getOrNull()
+                    val newToken = refreshedUser?.accessToken ?: ""
+                    val retryResult = doCall(newToken)
+                    code = retryResult.first
+                    body = retryResult.second
+                }
+            }
+
+            var rowCount = 0
+            if (code in 200..299) {
+                try {
+                    rowCount = JSONArray(body).length()
+                } catch (_: Exception) {}
+            }
+
+            RawRequestResult(
+                httpStatus = code,
+                rowCount = rowCount,
+                bodySnippet = body.take(300),
+                isSuccess = code in 200..299,
+                rawBody = body
+            )
+        } catch (e: Exception) {
+            val topStack = e.stackTrace.firstOrNull()?.toString() ?: ""
+            RawRequestResult(
+                httpStatus = -1,
+                rowCount = 0,
+                bodySnippet = "Error: ${e.message}\nCause: ${e.cause}\nTop stack: $topStack".take(300),
+                isSuccess = false,
+                rawBody = e.message ?: "Exception"
+            )
+        }
+    }
+
     suspend fun getRemoteTable(tableName: String): Result<JSONArray> = withContext(Dispatchers.IO) {
         try {
             val baseUrl = getBaseUrl()
@@ -329,7 +491,7 @@ class SupabaseClient(private val context: Context) {
             val token = user?.accessToken ?: anonKey
 
             val urlStr = if (tableName == "items") {
-                "$baseUrl/rest/v1/items?select=id,name,system_name,cost,customer_price,public_price&order=created_at.asc&limit=100"
+                "$baseUrl/rest/v1/items?select=id,name,system_name,cost,price,created_at,updated_at&order=created_at.asc&limit=1000"
             } else {
                 "$baseUrl/rest/v1/$tableName?select=*"
             }

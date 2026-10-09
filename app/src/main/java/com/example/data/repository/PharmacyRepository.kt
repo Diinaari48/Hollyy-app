@@ -27,7 +27,7 @@ data class QuizQuestion(
         get() = if (questionType == ItemStats.QUESTION_TYPE_COST) {
             "Kharashka ${item.name} (cost) waa immisa?"
         } else {
-            "Qiimaha ${item.name} waa immisa?"
+            "Qiimaha ${item.name} waa immisa marka macaamiil laga iibinayo?"
         }
 
     val targetPrice: Double
@@ -334,7 +334,7 @@ class PharmacyRepository(
         }
 
         val options = if (!isLevel2) {
-            DistractorGenerator.generateOptions(targetPrice, otherPrices)
+            DistractorGenerator.buildOptions(targetPrice, otherPrices)
         } else {
             emptyList()
         }
@@ -404,7 +404,7 @@ class PharmacyRepository(
             }
 
             val options = if (!isLevel2) {
-                DistractorGenerator.generateOptions(targetPrice, otherPrices)
+                DistractorGenerator.buildOptions(targetPrice, otherPrices)
             } else {
                 emptyList()
             }

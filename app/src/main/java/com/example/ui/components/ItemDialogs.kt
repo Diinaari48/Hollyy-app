@@ -31,13 +31,12 @@ import com.example.util.DistractorGenerator
 fun ItemFormDialog(
     initialItem: Item? = null,
     onDismiss: () -> Unit,
-    onSave: (name: String, systemName: String?, cost: Double, wholesalePrice: Double, price: Double) -> Unit
+    onSave: (name: String, systemName: String?, cost: Double, price: Double) -> Unit
 ) {
     val isEdit = initialItem != null
     var name by remember { mutableStateOf(initialItem?.name ?: "") }
     var systemName by remember { mutableStateOf(initialItem?.systemName ?: "") }
     var priceText by remember { mutableStateOf(initialItem?.let { DistractorGenerator.formatPrice(it.price) } ?: "") }
-    var wholesaleText by remember { mutableStateOf(initialItem?.let { if (it.wholesalePrice > 0.0) DistractorGenerator.formatPrice(it.wholesalePrice) else "" } ?: "") }
     var costText by remember { mutableStateOf(initialItem?.let { if (it.cost > 0.0) DistractorGenerator.formatPrice(it.cost) else "" } ?: "") }
 
     var nameError by remember { mutableStateOf(false) }
@@ -118,21 +117,6 @@ fun ItemFormDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Wholesale Price ("Macamil")
-                OutlinedTextField(
-                    value = wholesaleText,
-                    onValueChange = { wholesaleText = it },
-                    label = { Text("Qiimaha Macamilka (Jumlad / Macamil)") },
-                    placeholder = { Text("1.20") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("dialog_item_wholesale_input")
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
                 // Cost
                 OutlinedTextField(
                     value = costText,
@@ -159,8 +143,7 @@ fun ItemFormDialog(
 
                     if (validName && validPrice && p != null) {
                         val cost = costText.trim().replace(",", ".").toDoubleOrNull() ?: 0.0
-                        val wholesale = wholesaleText.trim().replace(",", ".").toDoubleOrNull() ?: 0.0
-                        onSave(name, systemName, cost, wholesale, p)
+                        onSave(name, systemName, cost, p)
                     }
                 },
                 modifier = Modifier.testTag("dialog_save_button")

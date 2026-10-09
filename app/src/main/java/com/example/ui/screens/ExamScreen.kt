@@ -549,7 +549,7 @@ private fun ActiveExamQuestionView(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    text = "Qiimaha ${question.item.name} waa immisa marka macaamiil laga iibinayo?",
+                    text = question.questionText,
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -560,6 +560,7 @@ private fun ActiveExamQuestionView(
         // Feedback Banner
         if (quizState.isEvaluating && quizState.feedback != null) {
             val isCorrect = quizState.feedback == FeedbackType.CORRECT
+            val formattedOfficial = DistractorGenerator.formatPrice(question.targetPrice)
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = if (isCorrect) SuccessGreen.copy(alpha = 0.15f) else ErrorRed.copy(alpha = 0.15f),
@@ -578,18 +579,11 @@ private fun ActiveExamQuestionView(
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = if (isCorrect) "Sax! Waad heshay 🎉" else "Khalad!",
+                            text = if (isCorrect) "Sax! Waad heshay 🎉" else "Khalad ❌ Qiimaha rasmiga ah waa $$formattedOfficial",
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp,
                             color = if (isCorrect) SuccessGreen else ErrorRed
                         )
-                        if (!isCorrect) {
-                            Text(
-                                text = "Qiimaha rasmiga ah waa: $${DistractorGenerator.formatPrice(question.item.price)}",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
                     }
                 }
             }
@@ -599,7 +593,7 @@ private fun ActiveExamQuestionView(
         if (!question.isLevel2Typed && question.options.isNotEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 question.options.forEachIndexed { idx, optionPrice ->
-                    val isCorrectOption = abs(optionPrice - question.item.price) < 0.009
+                    val isCorrectOption = abs(optionPrice - question.targetPrice) < 0.009
                     val isChosen = quizState.selectedOption != null && abs(quizState.selectedOption!! - optionPrice) < 0.009
 
                     val (bgColor, borderColor, textColor) = when {
@@ -630,6 +624,21 @@ private fun ActiveExamQuestionView(
                                 fontWeight = FontWeight.Bold,
                                 color = textColor
                             )
+                            if (quizState.isEvaluating && isCorrectOption) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = "Sax",
+                                    tint = SuccessGreen,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            } else if (quizState.isEvaluating && isChosen && !isCorrectOption) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Khalad",
+                                    tint = ErrorRed,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
                     }
                 }

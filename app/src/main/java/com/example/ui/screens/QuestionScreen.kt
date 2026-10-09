@@ -334,7 +334,7 @@ fun QuestionScreen(
                                 )
                                 Spacer(modifier = Modifier.height(6.dp))
                                 Text(
-                                    text = "Qiimaha ${question.item.name} waa immisa marka macaamiil laga iibinayo?",
+                                    text = question.questionText,
                                     style = MaterialTheme.typography.titleLarge,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface
@@ -366,7 +366,7 @@ fun QuestionScreen(
                             // LEVEL 1: 4 CHOICES
                             ChoiceAnswerSection(
                                 options = question.options,
-                                correctPrice = question.item.price,
+                                correctPrice = question.targetPrice,
                                 selectedOption = quizState.selectedOption,
                                 isEvaluating = quizState.isEvaluating,
                                 onOptionSelected = { viewModel.submitChoice(it) }
@@ -377,8 +377,7 @@ fun QuestionScreen(
                         if (quizState.feedback != FeedbackType.NONE) {
                             FeedbackSection(
                                 feedback = quizState.feedback,
-                                officialPrice = quizState.feedbackOfficialPrice ?: question.item.price,
-                                wholesalePrice = question.item.wholesalePrice,
+                                officialPrice = quizState.feedbackOfficialPrice ?: question.targetPrice,
                                 cost = question.item.cost,
                                 responseTimeMs = quizState.lastResponseTimeMs,
                                 speedCategory = quizState.speedCategory,
@@ -457,16 +456,38 @@ private fun ChoiceAnswerSection(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                text = "$${DistractorGenerator.formatPrice(option)}",
-                                fontSize = 20.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = when {
-                                    isEvaluating && isCorrectOption -> SuccessGreen
-                                    isEvaluating && isSelected -> ErrorRed
-                                    else -> MaterialTheme.colorScheme.onSurface
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Text(
+                                    text = "$${DistractorGenerator.formatPrice(option)}",
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = when {
+                                        isEvaluating && isCorrectOption -> SuccessGreen
+                                        isEvaluating && isSelected -> ErrorRed
+                                        else -> MaterialTheme.colorScheme.onSurface
+                                    }
+                                )
+                                if (isEvaluating && isCorrectOption) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = "Sax",
+                                        tint = SuccessGreen,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                } else if (isEvaluating && isSelected && !isCorrectOption) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Khalad",
+                                        tint = ErrorRed,
+                                        modifier = Modifier.size(20.dp)
+                                    )
                                 }
-                            )
+                            }
                         }
                     }
                 }
@@ -531,7 +552,6 @@ private fun TypedAnswerSection(
 private fun FeedbackSection(
     feedback: FeedbackType,
     officialPrice: Double,
-    wholesalePrice: Double,
     cost: Double,
     responseTimeMs: Long,
     speedCategory: com.example.data.model.SpeedCategory?,
@@ -599,7 +619,7 @@ private fun FeedbackSection(
                         isCorrect && speedCategory == com.example.data.model.SpeedCategory.SLOW ->
                             "Sax gaabis ah ⚠️ (${responseSeconds}s)"
                         isCorrect ->
-                            "Fiican ✅ (${responseSeconds}s)"
+                            "Sax! Waad heshay 🎉 (${responseSeconds}s)"
                         isWrong ->
                             "Khalad ❌ Qiimaha rasmiga ah waa $${DistractorGenerator.formatPrice(officialPrice)}"
                         else ->
@@ -661,25 +681,12 @@ private fun FeedbackSection(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Extra context: Wholesale, Cost & Streak
+            // Extra context: Cost & Streak
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (wholesalePrice > 0.0) {
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.surface
-                    ) {
-                        Text(
-                            text = "Macamil: $${DistractorGenerator.formatPrice(wholesalePrice)}",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
-                }
                 if (cost > 0.0) {
                     Surface(
                         shape = RoundedCornerShape(8.dp),

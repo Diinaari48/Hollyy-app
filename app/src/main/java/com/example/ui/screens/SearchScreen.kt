@@ -181,12 +181,11 @@ fun SearchScreen(
         ItemFormDialog(
             initialItem = itemToEdit,
             onDismiss = { itemToEdit = null },
-            onSave = { name, systemName, cost, wholesale, price ->
+            onSave = { name, systemName, cost, price ->
                 val updated = itemToEdit!!.copy(
                     name = name,
                     systemName = systemName,
                     cost = cost,
-                    wholesalePrice = wholesale,
                     price = price
                 )
                 viewModel.updateItem(updated)

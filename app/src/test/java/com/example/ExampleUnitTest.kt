@@ -49,19 +49,18 @@ class ExampleUnitTest {
         assertEquals("Paracetamol 500mg", first.name)
         assertEquals(0.50, first.cost, 0.01)
         assertEquals("PARA-500", first.systemName)
-        assertEquals(0.80, first.wholesalePrice, 0.01)
         assertEquals(1.00, first.price, 0.01)
     }
 
     @Test
     fun testCsvImporter_skipsRowsWithoutPrice() {
         val csvWithInvalid = """
-            Item,cost,Magaca systemka,macamil,qiimaha
-            Valid Item 1,0.50,VAL-1,0.80,1.25
-            No Price Item,0.50,NOP-1,0.80,
-            Zero Price Item,0.50,ZER-1,0.80,0.00
-            Invalid Price Item,0.50,INV-1,0.80,free
-            Valid Item 2,1.00,VAL-2,1.50,2.00
+            Item,cost,Magaca systemka,qiimaha
+            Valid Item 1,0.50,VAL-1,1.25
+            No Price Item,0.50,NOP-1,
+            Zero Price Item,0.50,ZER-1,0.00
+            Invalid Price Item,0.50,INV-1,free
+            Valid Item 2,1.00,VAL-2,2.00
         """.trimIndent()
 
         val result = CsvImporter.parse(csvWithInvalid)

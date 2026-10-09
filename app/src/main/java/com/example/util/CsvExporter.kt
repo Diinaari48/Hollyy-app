@@ -7,20 +7,19 @@ object CsvExporter {
 
     /**
      * Exports a list of medicines to the standardized CSV format:
-     * Item,cost,Magaca systemka,macamil,qiimaha
+     * Item,cost,Magaca systemka,qiimaha
      */
     fun exportToCsv(items: List<Item>): String {
         val sb = StringBuilder()
-        sb.append("Item,cost,Magaca systemka,macamil,qiimaha\n")
+        sb.append("Item,cost,Magaca systemka,qiimaha\n")
 
         for (item in items) {
             val name = escapeCsv(item.name)
             val cost = String.format(Locale.US, "%.2f", item.cost)
             val sysName = escapeCsv(item.systemName ?: "")
-            val macamil = String.format(Locale.US, "%.2f", item.wholesalePrice)
             val qiimaha = String.format(Locale.US, "%.2f", item.price)
 
-            sb.append("$name,$cost,$sysName,$macamil,$qiimaha\n")
+            sb.append("$name,$cost,$sysName,$qiimaha\n")
         }
 
         return sb.toString()

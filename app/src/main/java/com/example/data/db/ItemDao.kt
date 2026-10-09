@@ -24,6 +24,9 @@ interface ItemDao {
     @Query("SELECT * FROM items WHERE userId = :userId ORDER BY name ASC")
     suspend fun getAllItemsList(userId: String): List<Item>
 
+    @Query("SELECT COUNT(*) FROM items WHERE userId = :userId")
+    suspend fun getItemsCountForUser(userId: String): Int
+
     @Transaction
     @Query("SELECT * FROM items WHERE userId = :userId ORDER BY name ASC")
     fun getAllItemsWithStats(userId: String): Flow<List<ItemWithStats>>
@@ -49,6 +52,17 @@ interface ItemDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertItems(items: List<Item>)
+
+    @Query("DELETE FROM items WHERE userId = :userId AND id NOT IN (:keepIds)")
+    suspend fun deleteItemsNotInList(userId: String, keepIds: List<String>)
+
+    @Transaction
+    suspend fun syncUserItems(userId: String, items: List<Item>) {
+        if (items.isEmpty()) return
+        insertItems(items)
+        val keepIds = items.map { it.id }
+        deleteItemsNotInList(userId, keepIds)
+    }
 
     @Update
     suspend fun updateItem(item: Item)
@@ -126,7 +140,7 @@ interface ItemDao {
 
     @Query("""
         SELECT a.id AS attemptId, a.itemId AS itemId, i.name AS name, i.systemName AS systemName, 
-               i.price AS price, i.wholesalePrice AS wholesalePrice, i.cost AS cost, a.timestamp AS timestamp
+               i.price AS price, i.cost AS cost, a.timestamp AS timestamp
         FROM attempts a
         INNER JOIN items i ON a.itemId = i.id
         WHERE a.result = 'SKIPPED' AND a.userId = :userId
@@ -178,4 +192,3 @@ interface ItemDao {
     @Query("SELECT * FROM exam_results WHERE userId = :userId ORDER BY timestamp ASC")
     suspend fun getAllExamResultsAsc(userId: String): List<ExamResult>
 }
-

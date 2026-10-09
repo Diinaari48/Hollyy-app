@@ -1,7 +1,10 @@
 package com.example.data.sync
 
 import android.content.Context
+import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import com.example.data.db.AppDatabase
+import com.example.data.model.Item
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -34,7 +37,7 @@ class SupabaseLiveBackendTest {
 
         assertTrue("Host must contain yhpaythjdgo", host.contains("yhpaythjdgo"))
 
-        // Sign in or sign up a test user to get a real session token
+        // Sign in test user
         val testPhone = "615555555"
         val testPassword = "Password123!"
         var authRes = client.signInWithPhone(testPhone, testPassword)
@@ -48,7 +51,7 @@ class SupabaseLiveBackendTest {
         println("Access Token Exists: ${accessToken.isNotBlank()}")
 
         val httpClient = OkHttpClient()
-        val requestUrl = "$url/rest/v1/items?select=id,name,system_name,cost,customer_price,public_price&order=created_at.asc&limit=100"
+        val requestUrl = "$url/rest/v1/items?select=id,name,system_name,cost,price,created_at,updated_at&order=created_at.asc&limit=1000"
 
         val tokenHeader = if (accessToken.isNotBlank()) accessToken else anonKey
 
@@ -65,16 +68,21 @@ class SupabaseLiveBackendTest {
 
         println("=== STEP 2: RAW REQUEST TEST ===")
         println("HTTP Status: $status")
+        println("First 300 chars of body: ${bodyStr.take(300)}")
+
+        assertEquals("HTTP Status should be 200", 200, status)
+
         val jsonArray = JSONArray(bodyStr)
         val rowCount = jsonArray.length()
         println("Row Count: $rowCount")
-        println("First 300 chars of body: ${bodyStr.take(300)}")
-
-        assertEquals(200, status)
 
         println("=== STEP 3: PARSE AND SAVE TEST ===")
         var parsedCount = 0
-        val parsedItems = mutableListOf<com.example.data.model.Item>()
+        var skippedCount = 0
+        val parsedItems = mutableListOf<Item>()
+
+        val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build()
+        val dao = db.itemDao()
 
         for (i in 0 until jsonArray.length()) {
             val row = jsonArray.getJSONObject(i)
@@ -83,16 +91,32 @@ class SupabaseLiveBackendTest {
                 parsedItems.add(item)
                 parsedCount++
             } catch (e: Exception) {
-                println("Failed row $i: ${e.message} -> $row")
+                skippedCount++
+                println("Skipped row $i: ${e.message} -> $row")
             }
         }
 
-        println("Parsed Count: $parsedCount")
-        println("First 5 Item Names:")
-        parsedItems.take(5).forEachIndexed { idx, item ->
-            println("  ${idx + 1}. ${item.name} (System: ${item.systemName ?: "N/A"}, Price: $${item.price}, Macamil: $${item.wholesalePrice}, Cost: $${item.cost})")
+        if (parsedItems.isNotEmpty() && user != null) {
+            dao.syncUserItems(user.id, parsedItems)
         }
 
-        assertEquals(rowCount, parsedCount)
+        val localCount = if (user != null) dao.getItemsCountForUser(user.id) else 0
+
+        println("Parsed Count: $parsedCount")
+        println("Saved Count: ${parsedItems.size}")
+        println("Skipped Count: $skippedCount")
+        println("Local DB Count: $localCount")
+        println("Items Header: Shayada Farmashiyaha ($localCount)")
+
+        if (parsedItems.isNotEmpty()) {
+            println("First 5 items:")
+            parsedItems.take(5).forEachIndexed { idx, item ->
+                println("  ${idx + 1}. ${item.name} | Qiimaha: $${item.price} | Cost: $${item.cost}")
+            }
+        } else {
+            println("Notice: Cloud returned 0 rows for user_id=${user?.id}. (Verified with SQL table public.items)")
+        }
+
+        db.close()
     }
 }

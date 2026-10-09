@@ -3,6 +3,8 @@ package com.example.data.sync
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.util.Log
+import android.widget.Toast
 import com.example.data.db.ItemDao
 import com.example.data.model.Attempt
 import com.example.data.model.ExamResult
@@ -15,6 +17,15 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+
+data class LastLoadResult(
+    val timestamp: Long = System.currentTimeMillis(),
+    val parsedCount: Int = 0,
+    val savedCount: Int = 0,
+    val skippedCount: Int = 0,
+    val error: String? = null,
+    val exceptionDetails: String? = null
+)
 
 data class SyncResult(
     val success: Boolean,
@@ -46,11 +57,141 @@ class SupabaseSyncManager(
     private val _lastSyncResult = MutableStateFlow<SyncResult?>(null)
     val lastSyncResult: StateFlow<SyncResult?> = _lastSyncResult.asStateFlow()
 
+    private val _lastLoadResult = MutableStateFlow<LastLoadResult?>(null)
+    val lastLoadResult: StateFlow<LastLoadResult?> = _lastLoadResult.asStateFlow()
+
     fun isOnline(): Boolean {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
         val network = cm.activeNetwork ?: return false
         val capabilities = cm.getNetworkCapabilities(network) ?: return false
         return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    /**
+     * Loads items directly, null-safely, online-first.
+     * Completely independent of attempts / item_stats / exam_results.
+     */
+    suspend fun loadItems(showToastOnError: Boolean = true): Result<Int> = withContext(Dispatchers.IO) {
+        val user = client.currentUser.value
+        if (user == null || user.id.isBlank()) {
+            val err = "Fadlan gal akoonkaaga Supabase si aad u hesho xogta."
+            _lastLoadResult.value = LastLoadResult(
+                error = err,
+                exceptionDetails = "User is null or user id is blank"
+            )
+            return@withContext Result.failure(Exception(err))
+        }
+        val userId = user.id
+
+        try {
+            // Check if token expired before querying
+            if (client.isTokenExpired()) {
+                client.refreshSession()
+            }
+
+            val rawResult = client.fetchItemsRaw(retryOnAuthError = true)
+
+            if (!rawResult.isSuccess) {
+                val errorMsg = "HTTP ${rawResult.httpStatus}: ${rawResult.bodySnippet}"
+                Log.e("ItemsLoad", "Failed to load items: $errorMsg")
+                println("Failed to load items: $errorMsg")
+
+                _lastLoadResult.value = LastLoadResult(
+                    parsedCount = 0,
+                    savedCount = 0,
+                    skippedCount = 0,
+                    error = "HTTP ${rawResult.httpStatus}",
+                    exceptionDetails = rawResult.bodySnippet
+                )
+
+                if (showToastOnError) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(
+                            context,
+                            "Xogta lama soo qaadi karo, hubi internetka",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+
+                return@withContext Result.failure(Exception(errorMsg))
+            }
+
+            val jsonArray = JSONArray(rawResult.rawBody)
+            val rowCount = jsonArray.length()
+
+            if (rowCount == 0) {
+                Log.w("ItemsLoad", "Cloud returned 0 rows for user $userId with HTTP 200; keeping cached rows.")
+                println("Cloud returned 0 rows for user $userId with HTTP 200; keeping cached rows.")
+
+                _lastLoadResult.value = LastLoadResult(
+                    parsedCount = 0,
+                    savedCount = 0,
+                    skippedCount = 0,
+                    error = null,
+                    exceptionDetails = "Cloud returned 0 rows for user $userId"
+                )
+                return@withContext Result.success(0)
+            }
+
+            val validItems = mutableListOf<Item>()
+            var skippedCount = 0
+
+            for (i in 0 until rowCount) {
+                try {
+                    val row = jsonArray.getJSONObject(i)
+                    val item = ItemMapper.parseJsonToItem(row, userId)
+                    validItems.add(item)
+                } catch (e: Exception) {
+                    skippedCount++
+                    val topStack = e.stackTrace.firstOrNull()?.toString() ?: ""
+                    Log.w("ItemsLoad", "Skipping bad row $i: ${e.message} (Top: $topStack)")
+                }
+            }
+
+            if (validItems.isNotEmpty()) {
+                itemDao.syncUserItems(userId, validItems)
+            }
+
+            val savedCount = validItems.size
+            _lastLoadResult.value = LastLoadResult(
+                parsedCount = validItems.size,
+                savedCount = savedCount,
+                skippedCount = skippedCount,
+                error = null,
+                exceptionDetails = null
+            )
+
+            Log.i("ItemsLoad", "loadItems completed: parsed=${validItems.size}, saved=$savedCount, skipped=$skippedCount")
+            println("loadItems completed: parsed=${validItems.size}, saved=$savedCount, skipped=$skippedCount")
+
+            Result.success(savedCount)
+        } catch (e: Exception) {
+            val topStack = e.stackTrace.firstOrNull()?.toString() ?: ""
+            val excDetails = "Message: ${e.message}\nCause: ${e.cause}\nTop stack: $topStack"
+            Log.e("ItemsLoad", "Exception in loadItems: $excDetails", e)
+            println("Exception in loadItems: $excDetails")
+
+            _lastLoadResult.value = LastLoadResult(
+                parsedCount = 0,
+                savedCount = 0,
+                skippedCount = 0,
+                error = e.message ?: "Exception",
+                exceptionDetails = excDetails
+            )
+
+            if (showToastOnError) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        context,
+                        "Xogta lama soo qaadi karo, hubi internetka",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+
+            Result.failure(e)
+        }
     }
 
     suspend fun performSync(): SyncResult = withContext(Dispatchers.IO) {
@@ -66,24 +207,44 @@ class SupabaseSyncManager(
 
         val user = client.currentUser.value
         if (user == null) {
-            val res = SyncResult(false, errorMessage = "Fadlan marka hore gal akoonkaaga Supabase (Login) si aad u xog-wadaagto.")
+            val res = SyncResult(false, errorMessage = "Fadlan marka hore gal akoonkaaga Supabase si aad u xog-wadaagto.")
             _lastSyncResult.value = res
             return@withContext res
         }
 
         _isSyncing.value = true
         try {
-            // 1. Sync ITEMS
-            val itemsCount = syncItems(user.id)
+            // 1. Sync ITEMS independently
+            var itemsCount = 0
+            try {
+                itemsCount = loadItems(showToastOnError = false).getOrDefault(0)
+            } catch (e: Exception) {
+                Log.e("SupabaseSync", "Items sync failed: ${e.message}", e)
+            }
 
-            // 2. Sync ATTEMPTS
-            val attemptsCount = syncAttempts(user.id)
+            // 2. Sync ATTEMPTS independently
+            var attemptsCount = 0
+            try {
+                attemptsCount = syncAttempts(user.id)
+            } catch (e: Exception) {
+                Log.e("SupabaseSync", "Attempts sync failed: ${e.message}", e)
+            }
 
-            // 3. Sync ITEM_STATS
-            val statsCount = syncItemStats(user.id)
+            // 3. Sync ITEM_STATS independently
+            var statsCount = 0
+            try {
+                statsCount = syncItemStats(user.id)
+            } catch (e: Exception) {
+                Log.e("SupabaseSync", "Stats sync failed: ${e.message}", e)
+            }
 
-            // 4. Sync EXAM_RESULTS
-            val examsCount = syncExamResults(user.id)
+            // 4. Sync EXAM_RESULTS independently
+            var examsCount = 0
+            try {
+                examsCount = syncExamResults(user.id)
+            } catch (e: Exception) {
+                Log.e("SupabaseSync", "Exam results sync failed: ${e.message}", e)
+            }
 
             val successResult = SyncResult(
                 success = true,
@@ -101,65 +262,6 @@ class SupabaseSyncManager(
         } finally {
             _isSyncing.value = false
         }
-    }
-
-    private suspend fun syncItems(userId: String): Int {
-        val remoteRes = client.getRemoteTable("items")
-        if (remoteRes.isFailure) throw remoteRes.exceptionOrNull() ?: Exception("Failed fetching items")
-        val remoteArray = remoteRes.getOrNull() ?: JSONArray()
-
-        val remoteMap = mutableMapOf<String, JSONObject>()
-        for (i in 0 until remoteArray.length()) {
-            val obj = remoteArray.getJSONObject(i)
-            remoteMap[obj.getString("id")] = obj
-        }
-
-        val localItems = itemDao.getAllItemsList(userId)
-        val localMap = localItems.associateBy { it.id }
-
-        val itemsToPushToRemote = JSONArray()
-        var syncedCount = 0
-
-        // Handle remote items: if remote is newer, update local Room
-        for ((remoteId, remoteObj) in remoteMap) {
-            val remoteUpdatedAt = remoteObj.optLong("updated_at", remoteObj.optLong("created_at", 0L))
-            val localItem = localMap[remoteId]
-
-            if (localItem == null || remoteUpdatedAt > localItem.updatedAt) {
-                val itemToSave = ItemMapper.parseJsonToItem(remoteObj, userId)
-                itemDao.insertItem(itemToSave)
-                syncedCount++
-            }
-        }
-
-        // Handle local items: if local is newer or not in remote, push to Supabase
-        for (localItem in localItems) {
-            val remoteObj = remoteMap[localItem.id]
-            val remoteUpdatedAt = remoteObj?.optLong("updated_at", 0L) ?: -1L
-
-            if (remoteObj == null || localItem.updatedAt > remoteUpdatedAt) {
-                val obj = JSONObject().apply {
-                    put("id", localItem.id)
-                    put("user_id", userId)
-                    put("name", localItem.name)
-                    put("system_name", localItem.systemName)
-                    put("cost", localItem.cost)
-                    put("customer_price", localItem.wholesalePrice)
-                    put("public_price", localItem.price)
-                    put("created_at", localItem.createdAt)
-                    put("updated_at", localItem.updatedAt)
-                }
-                itemsToPushToRemote.put(obj)
-                syncedCount++
-            }
-        }
-
-        if (itemsToPushToRemote.length() > 0) {
-            val pushRes = client.upsertRemoteTable("items", itemsToPushToRemote)
-            if (pushRes.isFailure) throw pushRes.exceptionOrNull() ?: Exception("Failed uploading items")
-        }
-
-        return syncedCount
     }
 
     private suspend fun syncAttempts(userId: String): Int {

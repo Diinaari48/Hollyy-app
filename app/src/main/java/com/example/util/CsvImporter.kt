@@ -18,7 +18,7 @@ object CsvImporter {
 
     /**
      * Parses raw pasted CSV/TSV text.
-     * Expected columns: Item, cost, Magaca systemka, macamil, qiimaha
+     * Expected columns: Item, cost, Magaca systemka, qiimaha
      */
     fun parse(rawText: String): BulkImportPreviewResult {
         val lines = rawText.lines()
@@ -39,8 +39,8 @@ object CsvImporter {
         val colMap = if (hasHeader) {
             mapHeaderIndices(firstRowTokens)
         } else {
-            // Default expected order: Item(0), cost(1), Magaca systemka(2), macamil(3), qiimaha(4)
-            DefaultColumnMap(nameIdx = 0, costIdx = 1, sysNameIdx = 2, macamilIdx = 3, priceIdx = 4)
+            // Default expected order: Item(0), cost(1), Magaca systemka(2), qiimaha(3)
+            DefaultColumnMap(nameIdx = 0, costIdx = 1, sysNameIdx = 2, priceIdx = 3)
         }
 
         val validItems = mutableListOf<Item>()
@@ -71,9 +71,6 @@ object CsvImporter {
             val rawCost = tokens.getOrNull(colMap.costIdx)?.trim()?.replace("$", "")?.replace(",", ".") ?: ""
             val cost = rawCost.toDoubleOrNull() ?: 0.0
 
-            val rawMacamil = tokens.getOrNull(colMap.macamilIdx)?.trim()?.replace("$", "")?.replace(",", ".") ?: ""
-            val macamil = rawMacamil.toDoubleOrNull() ?: 0.0
-
             val systemName = tokens.getOrNull(colMap.sysNameIdx)?.trim()?.ifBlank { null }
 
             validItems.add(
@@ -81,7 +78,6 @@ object CsvImporter {
                     name = name,
                     systemName = systemName,
                     cost = cost,
-                    wholesalePrice = macamil,
                     price = price
                 )
             )
@@ -98,7 +94,6 @@ object CsvImporter {
         val nameIdx: Int,
         val costIdx: Int,
         val sysNameIdx: Int,
-        val macamilIdx: Int,
         val priceIdx: Int
     )
 
@@ -120,7 +115,7 @@ object CsvImporter {
         val lowerTokens = tokens.map { it.lowercase().trim() }
         return lowerTokens.any {
             it.contains("item") || it.contains("magac") || it.contains("cost") ||
-                    it.contains("qiimo") || it.contains("macamil") || it.contains("price")
+                    it.contains("qiimo") || it.contains("price")
         }
     }
 
@@ -128,8 +123,7 @@ object CsvImporter {
         var nameIdx = 0
         var costIdx = 1
         var sysNameIdx = 2
-        var macamilIdx = 3
-        var priceIdx = 4
+        var priceIdx = 3
 
         headers.forEachIndexed { i, h ->
             val clean = h.lowercase().trim()
@@ -143,16 +137,13 @@ object CsvImporter {
                 clean.contains("cost") || clean.contains("kharash") -> {
                     costIdx = i
                 }
-                clean.contains("macamil") || clean.contains("wholesale") -> {
-                    macamilIdx = i
-                }
                 clean.contains("qiimaha") || clean.contains("qiimo") || clean.contains("price") -> {
                     priceIdx = i
                 }
             }
         }
 
-        return DefaultColumnMap(nameIdx, costIdx, sysNameIdx, macamilIdx, priceIdx)
+        return DefaultColumnMap(nameIdx, costIdx, sysNameIdx, priceIdx)
     }
 
     private fun splitLine(line: String, delimiter: Char): List<String> {
